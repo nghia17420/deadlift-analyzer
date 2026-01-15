@@ -2,101 +2,119 @@
 
 A real-time, computer vision-based application designed to analyze deadlift form, track repetitions, and provide feedback on performance metrics using a **Raspberry Pi 5** and the **Hailo-8L AI Accelerator**.
 
-This project utilizes the `YOLOv8-Pose` model to detect keypoints and evaluate lifting mechanics such as:
-- **Back Bending**: Monitors hip-shoulder distance to detect spinal rounding.
-- **Hip Hinge**: Analysis of hip trajectory and vertical deviation.
-- **Timing Analysis**: Tracks eccentric (lowering) and concentric (lifting) phase durations.
-- **Rep Tracking**: Validates reps based on lockout angles and movement thresholds.
+This project utilizes the `YOLOv8-Pose` model to detect keypoints and evaluate lifting mechanics. It features a custom state machine for rep logic and a multi-threaded architecture for high-performance inference.
 
-## 🚀 Features
+## 🚀 Features & Capabilities
 
-- **Real-time Pose Estimation**: High-performance inference (30+ FPS) using Hailo-8L NPU.
-- **Rep-by-Rep Feedback**: Displays specific errors (e.g., "Back is bending", "Mechanical fatigue") for each completed rep.
-- **Timing Metrics**: Records `tAsc` (Time to Ascend) and `tDes` (Time to Descend) for every rep.
-- **Automated Workflow**: 
-  - `record.py`: Captures high-quality video efficiently.
-  - `analyze.py`: Processes videos with AI pipeline.
-  - `menu.py`: Unified interface for recording and analysis.
-- **Performance Graphs**: Generates post-workout visualization of joint angles, hip trajectory, and rep timings.
-- **Pipelined Architecture**: Uses multi-threading to separate AI inference from video writing for maximum speed.
+- **Real-time Pose Estimation**: ~30 FPS inference using Hailo-8L NPU.
+- **Form Feedback**: Detects specific errors like "Back Bending" or "Incorrect Hip Hinge" during the lift.
+- **Rep Timing**: Precision tracking of Ascending (`tAsc`) vs Descending (`tDes`) phases in seconds.
+- **Post-Set Analytics**: Generates graphs for Hip Trajectory and Velocity/Timing profiles.
 
 ## 🛠 Hardware Requirements
 
 - **Raspberry Pi 5** (8GB RAM recommended)
 - **Hailo-8L AI Kit** (M.2 Key M module + Hat)
 - **Raspberry Pi Camera Module 3** (or compatible Picamera2 device)
-- **Active Cooling** (Recommended for sustained inference)
+- **Active Cooling** (Highly Recommended)
 
 ## 📦 Installation
 
 1.  **Clone the Repository**:
     ```bash
-    git clone https://github.com/your-username/deadlift-analyzer.git
+    git clone https://github.com/nghia17420/deadlift-analyzer.git
     cd deadlift-analyzer
     ```
 
 2.  **Install Dependencies**:
-    Ensure you have the Hailo TAPPAS and HailoRT installed on your Raspberry Pi 5.
-    Then install Python requirements:
+    Ensure HailoRT/TAPPAS are installed. Then:
     ```bash
     pip install opencv-python numpy matplotlib tqdm
     ```
-    *Note: `hailo_apps` and `picamera2` are typically pre-installed on the official Raspberry Pi OS (Bookworm) with Hailo software.*
 
 3.  **Model Setup**:
-    This project requires compiled HEF (Hailo Executable Format) models.
-    - Download `yolov8s_pose.hef` (Small) or `yolov8n_pose.hef` (Nano) from the Hailo Model Zoo.
-    - Place them in `/usr/local/hailo/resources/models/hailo8l/` OR in the project root directory.
+    Download `yolov8s_pose.hef` or `yolov8n_pose.hef` from the Hailo Model Zoo and place them in the project folder.
 
-## 📖 Usage
+## 🧩 Code Structure & Key Functions
+
+The core logic resides in `analyze.py`. Here is a breakdown of the critical components:
+
+### 1. The State Machine (`DeadliftAnalyzer`)
+Logic to track the lifter's phase (Eccentric vs Concentric) and validate reps based on joint angles.
+
+```python
+def analyze_frame(self, kps, frame_idx):
+    # Calculate angle (Shoulder-Hip-Knee)
+    angle = calculate_angle(s, h, k)
+    
+    # State Transitions
+    if self.state == STATE_IDLE and angle < 165:
+        self.state = STATE_ECCENTRIC
+        self.eccentric_start_time = time.time()
+        
+    elif self.state == STATE_CONCENTRIC and is_straight:
+        self.state = STATE_LOCKOUT
+        self.reps += 1
+        # Capture ascent duration
+        duration = time.time() - self.concentric_start_time
+        self.rep_timings[self.reps]['asc'] = duration
+```
+
+### 2. Form Correction Logic
+We continuously monitor vector relationships between keypoints. For example, checking if the back bends under load:
+
+```python
+# Monitor Hip-Shoulder distance compression
+sh_dist = calculate_distance(shoulder, hip)
+if sh_dist < 0.8 * self.start_sh_dist:
+    self.log_error("Back is bending")
+```
+
+### 3. Pipelined Inference (`AsyncVideoWriter`)
+To achieve high FPS, we decoupled the **Inference Loop** from the **Video Writing** (I/O) operation. The main thread pushes processed frames to a queue, and a background thread handles the slow `.mp4` encoding.
+
+```python
+class AsyncVideoWriter:
+    def _run(self):
+        while self.running:
+            # Write frames from buffer without blocking the AI model
+            frame = self.queue.get()
+            self.writer.write(frame)
+```
+
+## 📚 Dependencies: Why `hailo-apps`?
+
+We include the [hailo-apps](https://github.com/hailo-ai/hailo-apps) repository in this folder.
+- **Reference**: `analyze.py` imports specific modules from it:
+  ```python
+  from pose_estimation_utils import PoseEstPostProcessing
+  from hailo_apps.python.core.common.hailo_inference import HailoInfer
+  ```
+- **Reason**: The `HailoInfer` class handles the complex low-level communication with the NPU (HEF loading, VDevice config). `PoseEstPostProcessing` efficiently handles the Non-Maximum Suppression (NMS) and decoding of the raw YOLO binaries into usable (x, y) keypoints. By bundling it, we ensure compatibility without forcing a full system-wide installation of the massive TAPPAS suite.
+
+## ⚡ Performance Optimization
+
+We achieved **>30 FPS** generic throughput (video speed) using two main techniques:
+
+1.  **Pipelining (Threading)**: 
+    *   *Problem*: `cv2.VideoWriter` is CPU-heavy and blocks execution.
+    *   *Solution*: Using `AsyncVideoWriter` allows the Hailo NPU to process the *next* frame while the CPU writes the *previous* frame to disk simultaneously.
+
+2.  **Model Selection**:
+    *   **YOLOv8-Nano (`n`)**: Extremely fast (~40-50 FPS), good for general flow.
+    *   **YOLOv8-Small (`s`)**: Balanced accuracy (~30 FPS).
+    *   **YOLOv8-Medium (`m`)**: High precision, slower (<15 FPS).
+
+## 📖 Usage Guide
 
 ### Main Menu
-Run the unified menu to access all features:
-```bash
-python menu.py
-```
-You will be presented with three options:
-1. **Record Only**: Capture a new lifting session.
-2. **Analyze Only**: Process an existing `.h264` video file.
-3. **Record & Analyze**: Automatically record and then immediately process the video.
+Run `python menu.py` to access the unified interface.
+- **Option 1 (Record)**: Uses `Picamera2` to capture raw `.h264` footage. Raw capture prevents dropped frames during recording.
+- **Option 2 (Analyze)**: Selects the AI model and video file.
+- **Option 3 (Auto)**: Chains both steps for a seamless "Record -> Evaluate" workout flow.
 
-### Recording (`record.py`)
-- Captures raw `.h264` video for low latency and high quality.
-- Saves videos in subfolders named `[LifterName]_[Weight]_[Date]`.
+## 📂 Git & Version Control
 
-### Analyzing (`analyze.py`)
-- Performs pose estimation on the video.
-- **Interactive**: Allows selecting between Speed (Nano/Small models) vs Accuracy (Medium model).
-- **Output**: 
-  - Generates an overlay video `*_analyzed.mp4` with skeleton tracking and feedback.
-  - Saves a `_analysis_graphs.png` with performance charts.
-
-## 📊 Thresholds & Logic
-
-| Metric | Threshold | logic |
-| :--- | :--- | :--- |
-| **Lockout Angle** | **> 165°** | Angle (Shoulder-Hip-Knee) for valid rep start/end. |
-| **Back Bending** | **< 80%** | Flagged if Shoulder-Hip distance compresses significantly. |
-| **Hip Hinge** | **> 20%** | Flagged if hips drop vertically (squatting instead of hinging). |
-| **Eccentric Fail** | **< 1.0s** | "Uncontrolled eccentric" (dropping the weight too fast). |
-| **Fatigue Warn** | **> 3.0s** | "Mechanical fatigue" (slow ascent). |
-| **Failure** | **> 5.0s** | "Mechanical failure" (grinding/stuck). |
-
-## 📂 Project Structure
-
-- `menu.py`: Entry point CLI.
-- `record.py`: Camera handling and video validation.
-- `analyze.py`: Core logic, AI inference, State Machine, and Visualization.
-- `record_and_analyze.py`: Wrapper for automation.
-- `hailo-apps/`: (Optional) Local link to Hailo app utilities if not in global path.
-
-## 🛑 Troubleshooting
-
-- **"Processing 0 frames"**: Usually happens with raw `.h264` files as they lack header metadata. The analyzer still processes them correctly.
-- **Low FPS**: 
-  - Ensure you are using the `AsyncVideoWriter` pipeline (enabled by default).
-  - Switch to `yolov8n_pose.hef` for faster inference.
-  - Disable video preview in recording if CPU is throttled.
-
----
-*Created by RaspBenny & The Google DeepMind Team*
+This repository is configured to ignore heavy media files by default.
+- **Included**: Source code (`.py`), Documentation (`.md`).
+- **Excluded**: `*.h264`, `*.mp4`, `*.hef` (Models), and session folders.
