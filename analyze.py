@@ -16,18 +16,15 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 # --- Path Setup for Hailo Apps ---
-# We need to import hailo_apps modules. Assuming we are in deadlift-analyzer/
 current_dir = os.path.dirname(os.path.abspath(__file__))
 hailo_apps_dir = os.path.join(current_dir, "hailo-apps")
 
 # Add paths for imports
-# utils.py is in .../standalone_apps/pose_estimation/
 pose_utils_path = os.path.join(hailo_apps_dir, "hailo_apps", "python", "standalone_apps", "pose_estimation")
-# core is in .../python/core (or common inside it)
 core_path = os.path.join(hailo_apps_dir, "hailo_apps", "python", "core")
 
 sys.path.append(pose_utils_path)
-sys.path.append(hailo_apps_dir) # to allow 'from hailo_apps...'
+sys.path.append(hailo_apps_dir)
 sys.path.append(core_path)
 
 # Try imports
@@ -35,7 +32,6 @@ try:
     from pose_estimation_utils import PoseEstPostProcessing
     from hailo_apps.python.core.common.hailo_inference import HailoInfer
 except ImportError:
-    # Fallback if structure is slightly different (e.g. installed package)
     try:
         from common.hailo_inference import HailoInfer
     except ImportError:
@@ -263,7 +259,8 @@ class DeadliftAnalyzer:
         # --- State Machine ---
         
         # Start Condition (Standing)
-        is_straight = (angle > 165) # Relaxed threshold slightly
+        # Threshold: Angle > 165 degrees implies legs are straight
+        is_straight = (angle > 165)
         
         if self.state == STATE_IDLE:
             if is_straight:
@@ -298,7 +295,6 @@ class DeadliftAnalyzer:
                      
                      # Check Eccentric speed
                      duration = self.concentric_start_time - self.eccentric_start_time
-                     duration = self.concentric_start_time - self.eccentric_start_time
                      
                      # Store Eccentric Time
                      curr_rep = self.reps + 1
@@ -317,8 +313,7 @@ class DeadliftAnalyzer:
             elif duration > 3.0:
                 self.log_error("Mechanical fatigue")
             
-            # Back check
-            # Back check
+            # Back check: Detect if back is rounding
             if sh_dist < 0.8 * self.start_sh_dist:
                  self.log_error("Back is bending")
 
@@ -428,16 +423,14 @@ def main():
 
     print(f"Initializing Hailo inference with model: {model_path}")
     
-    # 1. Init Inference
     try:
         hailo_infer = HailoInfer(model_path, batch_size=1, output_type="FLOAT32")
     except Exception as e:
         print(f"Failed to init Hailo: {e}")
         sys.exit(1)
         
-    # 2. Init Post-Process
     post_proc = PoseEstPostProcessing(
-        max_detections=10, # Increase to detect multiple people for tracking
+        max_detections=10, 
         score_threshold=CONF_THRESHOLD,
         nms_iou_thresh=0.7,
         regression_length=15,
@@ -641,43 +634,27 @@ def main():
         
         if best_idx >= 0:
             # Map back to original image
-            # The PostProc has map_keypoints_to_original_coords function!
-            # We can use it.
-            
-            # Map Box
             box = bboxes[best_idx]
             mapped_box = post_proc.map_box_to_original_coords(box, width, height, model_w, model_h)
             
             # Map KPs
-            kp = kps[best_idx] #(17, 2)
-            kp_score = joint_scores[best_idx] #(17, 1)
+            kp = kps[best_idx]
+            kp_score = joint_scores[best_idx]
             
             # Combine kp and score
-            kp_combined = np.column_stack((kp, kp_score)) #(17, 3)
+            kp_combined = np.column_stack((kp, kp_score))
             
             mapped_kp = post_proc.map_keypoints_to_original_coords(kp_combined[:,:2], width, height, model_w, model_h)
             
             final_kps = np.column_stack((mapped_kp, kp_combined[:,2]))
             
-            # Helper to draw
-            # ...
-            
             # Analyze
             state, errors = analyzer.analyze_frame(final_kps, frame_idx)
             
             # Draw
-            # Skeleton
-            # Draw
-            # Skeleton - Only draw the 6 keypoints for the active side
-            # s, h, k, a, w, e are the points.
-            # We need them again or just access from final_kps with indices?
-            # analyze_frame returned strict subsets logic but main loop draws ALL lines.
-            
-            # Let's get the side again to know what to draw
+            # Get side to draw relevant connecting lines
             side, s, h, k, e = analyzer.get_side_points(final_kps)
             
-            # Connections: S-E, S-H, H-K
-            # Points: S, H, K, E
             points_to_draw = [s, h, k, e]
             
             # Draw Points
@@ -695,8 +672,7 @@ def main():
             # H->K
             if h[2] > 0.2 and k[2] > 0.2:
                  cv2.line(frame, (int(h[0]), int(h[1])), (int(k[0]), int(k[1])), (0, 255, 0), 2)
-            # Link K->A Removed
-                    
+                     
             # Text
             cv2.putText(frame, f"Reps: {analyzer.reps}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
