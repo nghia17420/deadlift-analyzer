@@ -678,7 +678,7 @@ def main():
 
             # Rep-by-Rep Analysis Display
             # Top-right corner, listing reps
-            x_start = width - 400
+            x_start = width - 600
             y_start = 50
             line_height = 30
             

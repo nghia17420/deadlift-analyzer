@@ -240,7 +240,7 @@ def main():
                          for i, err in enumerate(errors):
                              cv2.putText(frame, f"! {err}", (30, 140 + i*40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
                      else:
-                         cv2.putText(frame, "Good Form", (w-250, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                         cv2.putText(frame, "Good Form", (w-300, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
             # Show Frame
             cv2.imshow("Deadlift Analyzer - Live", frame)
