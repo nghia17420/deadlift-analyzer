@@ -14,6 +14,7 @@ matplotlib.use('Agg') # Non-interactive backend to avoid Qt/X11 issues
 import glob
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import traceback
 
 # Hailo Apps Path Setup
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -350,10 +351,155 @@ class DeadliftAnalyzer:
         return self.state, self.errors
 
 # Main Execution
+
+# Processing Worker (Consumer)
+def processing_worker(proc_queue, writer, analyzer, post_proc, model_w, model_h, orig_width, orig_height, pbar):
+    track_box = None
+    
+    while True:
+        item = proc_queue.get()
+        if item is None:
+            proc_queue.task_done()
+            break
+            
+        frame_idx, frame, raw_detections = item
+        
+        try:
+            # Post Process
+            predictions = post_proc.post_process(raw_detections, model_h, model_w, class_num=1)
+            
+            bboxes = predictions['bboxes'][0]
+            scores = predictions['scores'][0]
+            kps = predictions['keypoints'][0]
+            joint_scores = predictions['joint_scores'][0]
+            
+            # Tracking Logic
+            best_idx = -1
+            valid_candidates = []
+            
+            for i in range(len(scores)):
+                score = scores[i]
+                if score > CONF_THRESHOLD:
+                    box = bboxes[i]
+                    ymin, xmin, ymax, xmax = box
+                    cx = (xmin + xmax) / 2
+                    cy = (ymin + ymax) / 2
+                    valid_candidates.append({'idx': i, 'score': score, 'cx': cx, 'cy': cy, 'box': box})
+            
+            if valid_candidates:
+                if track_box is None:
+                    # First time: Prefer Center
+                    image_cx = model_w / 2
+                    image_cy = model_h / 2
+                    
+                    for cand in valid_candidates:
+                        dist_to_center = (cand['cx'] - image_cx)**2 + (cand['cy'] - image_cy)**2
+                        cand['center_dist'] = dist_to_center
+                    
+                    valid_candidates.sort(key=lambda x: x['center_dist'])
+                    best_cand = valid_candidates[0]
+                    best_idx = best_cand['idx']
+                    track_box = best_cand['box']
+                else:
+                    # IoU Tracking
+                    for cand in valid_candidates:
+                        iou = calculate_iou(cand['box'], track_box)
+                        cand['iou'] = iou
+                    
+                    matched = [c for c in valid_candidates if c['iou'] > 0.2]
+                    
+                    if matched:
+                        matched.sort(key=lambda x: x['iou'], reverse=True)
+                        best_cand = matched[0]
+                        best_idx = best_cand['idx']
+                        track_box = best_cand['box']
+            
+            if best_idx >= 0:
+                # Map back to original image
+                box = bboxes[best_idx]
+                # Note: post_proc methods usually handle the mapping
+                
+                # Map KPs
+                kp = kps[best_idx]
+                kp_score = joint_scores[best_idx]
+                kp_combined = np.column_stack((kp, kp_score))
+                
+                mapped_kp = post_proc.map_keypoints_to_original_coords(kp_combined[:,:2], orig_width, orig_height, model_w, model_h)
+                final_kps = np.column_stack((mapped_kp, kp_combined[:,2]))
+                
+                # Analyze
+                state, errors = analyzer.analyze_frame(final_kps, frame_idx)
+                
+                # Draw
+                side, s, h, k, e = analyzer.get_side_points(final_kps)
+                points_to_draw = [s, h, k, e]
+                
+                for p in points_to_draw:
+                    if p[2] > 0.2:
+                        cv2.circle(frame, (int(p[0]), int(p[1])), 5, (0, 0, 255), -1)
+
+                # Draw Lines
+                if s[2] > 0.2 and e[2] > 0.2:
+                     cv2.line(frame, (int(s[0]), int(s[1])), (int(e[0]), int(e[1])), (0, 255, 0), 2)
+                if s[2] > 0.2 and h[2] > 0.2:
+                     cv2.line(frame, (int(s[0]), int(s[1])), (int(h[0]), int(h[1])), (0, 255, 0), 2)
+                if h[2] > 0.2 and k[2] > 0.2:
+                     cv2.line(frame, (int(h[0]), int(h[1])), (int(k[0]), int(k[1])), (0, 255, 0), 2)
+                         
+                # Text Overlay
+                cv2.putText(frame, f"Reps: {analyzer.reps}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
+
+                # Rep History Logic
+                x_start = orig_width - 600
+                y_start = 50
+                line_height = 30
+                max_r = analyzer.reps
+                y_curr = y_start
+                
+                for r in range(1, max_r + 1):
+                    errors_rep = analyzer.rep_history.get(r, [])
+                    timings = analyzer.rep_timings.get(r, {})
+                    t_asc = timings.get('asc', 0.0)
+                    t_des = timings.get('des', 0.0)
+                    
+                    header_text = f"Rep {r}:"
+                    if t_asc > 0 or t_des > 0:
+                        header_text += f" (tAsc:{t_asc:.1f}s tDes:{t_des:.1f}s)"
+                    
+                    if not errors_rep:
+                         header_text += " Good"
+                         cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                         y_curr += line_height
+                    else:
+                         cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                         y_curr += line_height
+                         for err in errors_rep:
+                             cv2.putText(frame, f"- {err}", (x_start + 20, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                             y_curr += line_height
+                    y_curr += 10
+                
+                curr_angle = 0
+                if analyzer.history_shk_angles and analyzer.history_shk_angles[-1][1] > 0:
+                     curr_angle = analyzer.history_shk_angles[-1][1]
+                
+                cv2.putText(frame, f"Angle: {int(curr_angle)}", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2)
+
+            writer.write(frame)
+            if pbar is not None:
+                pbar.update(1)
+            
+        except Exception as e:
+            print(f"Error in processing worker: {e}")
+            traceback.print_exc()
+        finally:
+            proc_queue.task_done()
+
+# Main Execution
 def main():
     parser = argparse.ArgumentParser(description="Deadlift Analyzer")
     parser.add_argument("video_path", nargs="?", help="Path to video file")
     parser.add_argument("--model", help="Path to .hef model file (e.g. yolov8m_pose.hef)")
+    parser.add_argument("--buffer", type=int, default=32, help="Buffer size/In-flight frames")
     args = parser.parse_args()
 
     video_path = args.video_path
@@ -374,7 +520,6 @@ def main():
 
     # Check local Directory fallback
     if not os.path.exists(model_path):
-        # Try finding it in current dir
         local_name = os.path.basename(model_path)
         if os.path.exists(local_name):
             model_path = local_name
@@ -382,16 +527,10 @@ def main():
             model_path = os.path.join(current_dir, local_name)
     
     if not video_path:
-        # Find recent videos
         print("\n--- Scanning for recent videos ---")
-        # Find all .h264 files recursively
         files = glob.glob("**/*.h264", recursive=True)
-        # Exclude those that look like output, though output is mp4 usually.
-        # record.py outputs h264.
-        
-        # Sort by modification time
         files = sorted(files, key=os.path.getmtime, reverse=True)
-        files = files[:10] # Top 10
+        files = files[:10]
         
         if not files:
             print("No recent videos found.")
@@ -418,7 +557,6 @@ def main():
 
     if not os.path.exists(model_path):
         print(f"Model not found: {model_path}")
-        print("Please ensure you have downloaded the model (e.g. yolov8m_pose.hef).")
         sys.exit(1)
 
     print(f"Initializing Hailo inference with model: {model_path}")
@@ -437,7 +575,6 @@ def main():
         strides=[8, 16, 32]
     )
     
-    # 3. Open Video
     cap = cv2.VideoCapture(video_path)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -445,370 +582,189 @@ def main():
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total_frames < 0: total_frames = 0
     
-    # Output Video
-    # Extract model name for suffix
     model_name = os.path.basename(model_path).replace(".hef", "").replace("_pose", "")
     suffix = f"_analyzed_{model_name}.mp4"
-    
     out_path = video_path.replace(".h264", "").replace(".mp4", "") + suffix
     if out_path == video_path: out_path += "_out.mp4"
     
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # or avc1
-    # Use Async Writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out_writer = AsyncVideoWriter(out_path, fourcc, fps, (width, height))
     
     analyzer = DeadliftAnalyzer()
-    
     model_h, model_w, _ = hailo_infer.get_input_shape()
     
     if total_frames > 0:
-        print(f"Processing {total_frames} frames...")
+        print(f"Processing {total_frames} frames with pipeline...")
         pbar = tqdm(total=total_frames, unit="frames")
     else:
         print("Processing frames (count unknown)...")
         pbar = tqdm(unit="frames")
     
+    # --- PIPELINE SETUP ---
+    
+    buffer_size = args.buffer
+    proc_queue = queue.Queue(maxsize=buffer_size)
+    pending_frames_q = queue.Queue() # (idx, frame)
+    inflight_sem = threading.Semaphore(buffer_size)
+
+    # Callback for Hailo
+    def inference_callback(completion_info, bindings_list):
+        if completion_info.exception:
+            print(f"Inference Exception: {completion_info.exception}")
+            inflight_sem.release()
+            return
+            
+        try:
+            # Retrieve the corresponding frame
+            frame_idx, frame = pending_frames_q.get_nowait()
+        except queue.Empty:
+            print("Error: Callback received but no pending frame in queue!")
+            inflight_sem.release()
+            return
+
+        # Extract Results
+        # Bindings list contains the output buffers
+        # We must copy them because we are passing them to another thread
+        # and the buffer might be reused by Hailo? 
+        # Actually, usually bindings are valid in the callback.
+        # But for thread safety: copy.
+        res = {}
+        for bindings in bindings_list:
+             for name in bindings._output_names:
+                 # Expand dims (batch dim) and COPY
+                 res[name] = np.expand_dims(np.array(bindings.output(name).get_buffer()), axis=0)
+
+        # Enqueue for processing
+        proc_queue.put((frame_idx, frame, res))
+        
+        # Allow next frame
+        inflight_sem.release()
+
+    # Start Worker Thread
+    worker_t = threading.Thread(
+        target=processing_worker,
+        args=(proc_queue, out_writer, analyzer, post_proc, model_w, model_h, width, height, pbar),
+        daemon=True
+    )
+    worker_t.start()
+
     frame_idx = 0
     
-    # Actually, async is faster. Let's use the callback pattern.
+    print("Starting pipeline...")
     
-    track_box = None # Tracking state [ymin, xmin, ymax, xmax]
-
-    def callback(completion_info, bindings_list, input_batch, output_queue):
-        if completion_info.exception:
-            print(f"Error: {completion_info.exception}")
-            return
-        # Get result
-        for i, bindings in enumerate(bindings_list):
-            # Assuming 1 output or dict
-            # pose model usually has multiple outputs.
-            # The example uses bindings.output(name).get_buffer()
-            # We need to reconstruct the dict expected by post_process
-            # The PostProc expects 'raw_detections' dict.
-            res = {}
-            for name in bindings._output_names:
-                res[name] = np.expand_dims(bindings.output(name).get_buffer(), axis=0)
-            output_queue.put((input_batch[i], res))
-
-    # Loop
     while cap.isOpened():
+        inflight_sem.acquire() # Backpressure
+        
         ret, frame = cap.read()
         if not ret:
+            inflight_sem.release() # Release because we didn't use it
             break
             
         frame_idx += 1
         
         # Preprocess
-        # Resize/Letterbox to model_w, model_h
-        # But hailo_apps.preprocess handles this? 
-        # We'll do simple resize or use provided utils if available.
-        # Let's do manual letterbox to be safe and dependent-free.
-        
         scale = min(model_w / width, model_h / height)
         nw, nh = int(width * scale), int(height * scale)
         resized = cv2.resize(frame, (nw, nh))
         
-        # Pad
         canvas = np.full((model_h, model_w, 3), 114, dtype=np.uint8)
         dx = (model_w - nw) // 2
         dy = (model_h - nh) // 2
         canvas[dy:dy+nh, dx:dx+nw, :] = resized
         
-        # Infer
-        # We need a list of frames [canvas]
-        # HailoInfer.run expects [frames], callback
+        # Store metadata BEFORE running to ensure order in queue
+        pending_frames_q.put((frame_idx, frame))
         
-        # Use a list to store result from callback (closure)
-        res_container = []
-        def sync_cb(completion_info, bindings_list):
-             if completion_info.exception: return
-             for bindings in bindings_list:
-                 res = {}
-                 for name in bindings._output_names:
-                     res[name] = np.expand_dims(bindings.output(name).get_buffer(), axis=0)
-                 res_container.append(res)
-
-        hailo_infer.run([canvas], sync_cb)
-        # Wait? run is async.
-        # HailoInfer doesn't have wait().
-        # We must use a queue or Semaphore.
-        
-        # Actually, let's use the simple flow: run -> wait -> process.
-        # But run() returns immediately.
-        # We'll assume for single batch, we can define a status flag.
-        
-        # Better: Put into queue and wait.
-        
-        # WAIT: The example uses a queue.
-        # I'll stick to synchronous logic by sleeping/waiting on queue.
-        
-        # ... (Inference Code) ...
-        # Since I can't implement complex async here easily without testing,
-        # I'll assume I can wait for the callback.
-        
-        timeout = 2.0
-        start_wait = time.time()
-        while not res_container and (time.time() - start_wait < timeout):
-            time.sleep(0.001)
-            
-        if not res_container:
-            print("Timeout waiting for inference")
-            # Write original frame to avoid skip
-            out_writer.write(frame)
-            continue
-            
-        raw_detections = res_container[0]
-        
-        # Post Process
-        # class_num=1 for Person
-        predictions = post_proc.post_process(raw_detections, model_h, model_w, class_num=1)
-        
-        # Predictions format: {'predictions': [bboxes, scores, kps, joint_scores]} or similar
-        # Utils code returns a DICT with 'bboxes', 'keypoints' etc.
-        
-        # Filter closest person
-        bboxes = predictions['bboxes'][0] # batch 0
-        scores = predictions['scores'][0]
-        kps = predictions['keypoints'][0]
-        joint_scores = predictions['joint_scores'][0]
-        num_dets = int(predictions['num_detections'][0]) if 'num_detections' in predictions else len(bboxes)
-        # Note: num_detections might be inside the dict structure differently check utils source.
-        # Step 29: output['bboxes'][b, :nms_res...
-        # So it's padded. We need to find valid ones.
-        
-        # Find best person (Tracking)
-        best_idx = -1
-        
-        # Parse all valid detections first
-        valid_candidates = []
-        for i in range(len(scores)):
-            score = scores[i]
-            if score > CONF_THRESHOLD:
-                # bboxes is [ymin, xmin, ymax, xmax] (likely normalized or model coords)
-                # Ensure we pass the raw box for tracking logic if standardized
-                box = bboxes[i] 
-                ymin, xmin, ymax, xmax = box
-                cx = (xmin + xmax) / 2
-                cy = (ymin + ymax) / 2
-                valid_candidates.append({'idx': i, 'score': score, 'cx': cx, 'cy': cy, 'box': box})
-        
-        if valid_candidates:
-            if track_box is None:
-                # First time: Prefer Center + Score
-                image_cx = model_w / 2
-                image_cy = model_h / 2
-                
-                # Sort by distance to image center
-                for cand in valid_candidates:
-                    dist_to_center = (cand['cx'] - image_cx)**2 + (cand['cy'] - image_cy)**2
-                    cand['center_dist'] = dist_to_center
-                
-                # Sort by center distance
-                valid_candidates.sort(key=lambda x: x['center_dist'])
-                
-                best_cand = valid_candidates[0]
-                best_idx = best_cand['idx']
-                track_box = best_cand['box']
-            else:
-                # Tracking: IoU Overlap
-                # Calculate IoU with track_box
-                for cand in valid_candidates:
-                    iou = calculate_iou(cand['box'], track_box)
-                    cand['iou'] = iou
-                
-                # Filter by Threshold (e.g. 0.2 overlap)
-                matched = [c for c in valid_candidates if c['iou'] > 0.2]
-                
-                if matched:
-                    # Sort by IoU desc
-                    matched.sort(key=lambda x: x['iou'], reverse=True)
-                    best_cand = matched[0]
-                    best_idx = best_cand['idx']
-                    track_box = best_cand['box'] # Update tracking box
-                else:
-                    # No overlap with last known box.
-                    # Assumption: Lifter is occluded or missing.
-                    # Do NOT update track_box. Keep old one.
-                    # Do NOT select any candidate (skip analysis for this frame)
-                    best_idx = -1 # Explicitly skip
-        
-        if best_idx >= 0:
-            # Map back to original image
-            box = bboxes[best_idx]
-            mapped_box = post_proc.map_box_to_original_coords(box, width, height, model_w, model_h)
-            
-            # Map KPs
-            kp = kps[best_idx]
-            kp_score = joint_scores[best_idx]
-            
-            # Combine kp and score
-            kp_combined = np.column_stack((kp, kp_score))
-            
-            mapped_kp = post_proc.map_keypoints_to_original_coords(kp_combined[:,:2], width, height, model_w, model_h)
-            
-            final_kps = np.column_stack((mapped_kp, kp_combined[:,2]))
-            
-            # Analyze
-            state, errors = analyzer.analyze_frame(final_kps, frame_idx)
-            
-            # Draw
-            # Get side to draw relevant connecting lines
-            side, s, h, k, e = analyzer.get_side_points(final_kps)
-            
-            points_to_draw = [s, h, k, e]
-            
-            # Draw Points
-            for p in points_to_draw:
-                if p[2] > 0.2:
-                    cv2.circle(frame, (int(p[0]), int(p[1])), 5, (0, 0, 255), -1)
-
-            # Draw Lines
-            # S->E
-            if s[2] > 0.2 and e[2] > 0.2:
-                 cv2.line(frame, (int(s[0]), int(s[1])), (int(e[0]), int(e[1])), (0, 255, 0), 2)
-            # S->H (Skip E->W)
-            if s[2] > 0.2 and h[2] > 0.2:
-                 cv2.line(frame, (int(s[0]), int(s[1])), (int(h[0]), int(h[1])), (0, 255, 0), 2)
-            # H->K
-            if h[2] > 0.2 and k[2] > 0.2:
-                 cv2.line(frame, (int(h[0]), int(h[1])), (int(k[0]), int(k[1])), (0, 255, 0), 2)
-                     
-            # Text
-            cv2.putText(frame, f"Reps: {analyzer.reps}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
-
-            # Rep-by-Rep Analysis Display
-            # Top-right corner, listing reps
-            x_start = width - 600
-            y_start = 50
-            line_height = 30
-            
-            # Determine range of reps to show
-            # ONLY SHOW COMPLETED REPS (1 to analyzer.reps)
-            # The current rep (analyzer.reps + 1) is still in progress, so don't show it yet.
-            max_r = analyzer.reps
-            
-            y_curr = y_start
-            
-            for r in range(1, max_r + 1):
-                errors = analyzer.rep_history.get(r, [])
-                timings = analyzer.rep_timings.get(r, {})
-                t_asc = timings.get('asc', 0.0)
-                t_des = timings.get('des', 0.0)
-                
-                # Format: Rep X (tAsc: 1.2s, tDes: 0.9s):
-                header_text = f"Rep {r}:"
-                if t_asc > 0 or t_des > 0:
-                    header_text += f" (tAsc:{t_asc:.1f}s tDes:{t_des:.1f}s)"
-                
-                if not errors:
-                     # Good
-                     header_text += " Good"
-                     cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                     y_curr += line_height
-                else:
-                     # Bad
-                     cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-                     y_curr += line_height
-                     for err in errors:
-                         cv2.putText(frame, f"- {err}", (x_start + 20, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                         y_curr += line_height
-                
-                y_curr += 10 # Spacing between reps
-            
-            curr_angle = 0
-            if analyzer.history_shk_angles and analyzer.history_shk_angles[-1][1] > 0:
-                 curr_angle = analyzer.history_shk_angles[-1][1]
-            
-            cv2.putText(frame, f"Angle: {int(curr_angle)}", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2)
-
-        out_writer.write(frame)
-        pbar.update(1)
-
+        # Async Run
+        hailo_infer.run([canvas], inference_callback)
+    
+    # Wait for completion
+    # Wait for all inflight to finish
+    # We started with semaphore = buffer_size
+    # If we acquire 'buffer_size' times, it means all are done.
+    for _ in range(buffer_size):
+        inflight_sem.acquire()
+    
+    # Now all callbacks are done.
+    # pending_frames_q should be empty.
+    
+    # Put sentinel for worker
+    proc_queue.put(None)
+    worker_t.join()
+    
     pbar.close()
     cap.release()
     out_writer.release()
     hailo_infer.close()
     
-    # Graphs
+    print("Analysis Complete.")
+
     # Graphs
     if analyzer.history_shk_angles:
-        times = [x[0] for x in analyzer.history_shk_angles]
-        shk = [x[1] for x in analyzer.history_shk_angles]
-        dists = [x[1] for x in analyzer.history_sh_dist]
-        
-        valid_traj = [t for t in analyzer.history_hip_traj if t[1] > 0 and t[2] > 0]
-        traj_x = [t[1] for t in valid_traj]
-        traj_y = [t[2] for t in valid_traj]
-        
-        fig, axs = plt.subplots(2, 2, figsize=(12, 10))
-        
-        # 1. SHK Angle
-        axs[0, 0].plot(times, shk, 'g')
-        axs[0, 0].set_title("Shoulder-Hip-Knee Angle")
-        axs[0, 0].set_xlabel("Frame")
-        axs[0, 0].set_ylabel("Deg")
-        
-        fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-        
-        # 1. SHK Angle
-        axs[0, 0].plot(times, shk, 'g')
-        axs[0, 0].set_title("Shoulder-Hip-Knee Angle")
-        axs[0, 0].set_xlabel("Frame")
-        axs[0, 0].set_ylabel("Deg")
-        
-        # 2. Ascending/Descending Times (Bar Chart)
-        reps = sorted(analyzer.rep_timings.keys())
-        asc_times = [analyzer.rep_timings[r].get('asc', 0) for r in reps]
-        des_times = [analyzer.rep_timings[r].get('des', 0) for r in reps]
-        
-        x = np.arange(len(reps))
-        width = 0.35
-        
-        if reps:
-            rects1 = axs[0, 1].bar(x - width/2, asc_times, width, label='Ascent')
-            rects2 = axs[0, 1].bar(x + width/2, des_times, width, label='Descent')
-            axs[0, 1].set_ylabel('Seconds')
-            axs[0, 1].set_title('Rep Timings')
-            axs[0, 1].set_xticks(x)
-            axs[0, 1].set_xticklabels([f"Rep {r}" for r in reps])
-            axs[0, 1].legend()
-        else:
-            axs[0, 1].text(0.5, 0.5, "No Reps Recorded", ha='center')
-
-        # 3. SH Distance
-        axs[1, 0].plot(times, dists, 'r')
-        axs[1, 0].set_title("Hip-Shoulder Distance (Back Bending)")
-        axs[1, 0].set_xlabel("Frame")
-        axs[1, 0].set_ylabel("Pixels")
-        
-        # 4. Rep Summary Table
-        axs[1, 1].axis('off')
-        
-        # Prepare table data
-        table_data = []
-        # Columns: Rep, Status, Time
-        # Status = "Good" or list of errors
-        
-        for r in reps:
-            errs = analyzer.rep_history.get(r, [])
-            status = "Good" if not errs else "\n".join(errs)
-            t_asc = analyzer.rep_timings[r].get('asc', 0)
-            t_des = analyzer.rep_timings[r].get('des', 0)
-            time_str = f"Up: {t_asc:.1f}s\nDown: {t_des:.1f}s"
-            table_data.append([f"Rep {r}", status, time_str])
+        try:
+            times = [x[0] for x in analyzer.history_shk_angles]
+            shk = [x[1] for x in analyzer.history_shk_angles]
+            dists = [x[1] for x in analyzer.history_sh_dist]
             
-        if table_data:
-            table = axs[1, 1].table(cellText=table_data, colLabels=["Rep", "Analysis", "Timings"], loc='center', cellLoc='left')
-            table.auto_set_font_size(False)
-            table.set_fontsize(9)
-            table.scale(1, 1.5)
-            axs[1, 1].set_title("Rep Analysis Summary")
-        else:
-             axs[1, 1].text(0.5, 0.5, "No Analysis Data", ha='center')
-        
-        plt.tight_layout()
-        plt.savefig(video_path + f"_analysis_graphs_{model_name}.png")
-        print("Detailed graphs saved.")
+            fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+            
+            # 1. SHK Angle
+            axs[0, 0].plot(times, shk, 'g')
+            axs[0, 0].set_title("Shoulder-Hip-Knee Angle")
+            axs[0, 0].set_xlabel("Frame")
+            axs[0, 0].set_ylabel("Deg")
+            
+            # 2. Ascending/Descending Times (Bar Chart)
+            reps = sorted(analyzer.rep_timings.keys())
+            asc_times = [analyzer.rep_timings[r].get('asc', 0) for r in reps]
+            des_times = [analyzer.rep_timings[r].get('des', 0) for r in reps]
+            
+            x = np.arange(len(reps))
+            width_bar = 0.35
+            
+            if reps:
+                rects1 = axs[0, 1].bar(x - width_bar/2, asc_times, width_bar, label='Ascent')
+                rects2 = axs[0, 1].bar(x + width_bar/2, des_times, width_bar, label='Descent')
+                axs[0, 1].set_ylabel('Seconds')
+                axs[0, 1].set_title('Rep Timings')
+                axs[0, 1].set_xticks(x)
+                axs[0, 1].set_xticklabels([f"Rep {r}" for r in reps])
+                axs[0, 1].legend()
+            else:
+                axs[0, 1].text(0.5, 0.5, "No Reps Recorded", ha='center')
+
+            # 3. SH Distance
+            axs[1, 0].plot(times, dists, 'r')
+            axs[1, 0].set_title("Hip-Shoulder Distance (Back Bending)")
+            axs[1, 0].set_xlabel("Frame")
+            axs[1, 0].set_ylabel("Pixels")
+            
+            # 4. Rep Summary Table
+            axs[1, 1].axis('off')
+            
+            table_data = []
+            for r in reps:
+                errs = analyzer.rep_history.get(r, [])
+                status = "Good" if not errs else "\n".join(errs)
+                t_asc = analyzer.rep_timings[r].get('asc', 0)
+                t_des = analyzer.rep_timings[r].get('des', 0)
+                time_str = f"Up: {t_asc:.1f}s\nDown: {t_des:.1f}s"
+                table_data.append([f"Rep {r}", status, time_str])
+                
+            if table_data:
+                table = axs[1, 1].table(cellText=table_data, colLabels=["Rep", "Analysis", "Timings"], loc='center', cellLoc='left')
+                table.auto_set_font_size(False)
+                table.set_fontsize(9)
+                table.scale(1, 1.5)
+                axs[1, 1].set_title("Rep Analysis Summary")
+            else:
+                 axs[1, 1].text(0.5, 0.5, "No Analysis Data", ha='center')
+            
+            plt.tight_layout()
+            plt.savefig(video_path + f"_analysis_graphs_{model_name}.png")
+            print("Detailed graphs saved.")
+        except Exception as e:
+            print(f"Error saving graphs: {e}")
 
 if __name__ == "__main__":
     main()

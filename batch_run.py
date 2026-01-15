@@ -4,7 +4,7 @@ import glob
 
 models = [
     "/usr/local/hailo/resources/models/hailo8l/yolov8s_pose.hef",
-    "/usr/local/hailo/resources/models/hailo8l/yolov8m_pose.hef"
+    # "/usr/local/hailo/resources/models/hailo8l/yolov8m_pose.hef"
 ]
 
 files = glob.glob("**/*.h264", recursive=True)
