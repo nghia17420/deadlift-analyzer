@@ -43,6 +43,7 @@ Here is an overview of the key files and directories in the project:
 -   `analyze.py`: **Core Application**. Handles AI inference, state machine logic, error detection, and video generation.
 -   `record.py`: Recording script using `Picamera2` to capture raw `.h264` video.
 -   `menu.py`: Interactive CLI menu to easily switch between recording and analyzing.
+-   `live_analyze_preview.py`: **Live Assessment**. Runs real-time inference directly from the camera feed, providing immediate visual feedback without saving to disk first.
 -   `record_and_analyze.py`: Automation script that records a video and immediately runs analysis on it.
 -   `hailo-apps/`: A bundled submodule containing the necessary Hailo NPU interface and post-processing tools.
 
@@ -154,6 +155,7 @@ Run `python menu.py` to access the unified interface.
 - **Option 1 (Record)**: Uses `Picamera2` to capture raw `.h264` video. Raw capture prevents dropped frames during recording.
 - **Option 2 (Analyze)**: Selects the AI model and video file.
 - **Option 3 (Auto)**: Chains both steps for a seamless "Record -> Evaluate" workout flow.
+- **Option 4 (Live Analysis)**: Starts the real-time preview mode. Useful for quick form checks or setup. Automatically saves the output to a timestamped folder.
 
 ## 📂 Git & Version Control
 

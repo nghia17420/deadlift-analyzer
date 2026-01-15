@@ -674,7 +674,7 @@ def main():
                  cv2.line(frame, (int(h[0]), int(h[1])), (int(k[0]), int(k[1])), (0, 255, 0), 2)
                      
             # Text
-            cv2.putText(frame, f"Reps: {analyzer.reps}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+            cv2.putText(frame, f"Reps: {analyzer.reps}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
 
             # Rep-by-Rep Analysis Display
             # Top-right corner, listing reps
@@ -703,14 +703,14 @@ def main():
                 if not errors:
                      # Good
                      header_text += " Good"
-                     cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                     cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                      y_curr += line_height
                 else:
                      # Bad
-                     cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                     cv2.putText(frame, header_text, (x_start, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
                      y_curr += line_height
                      for err in errors:
-                         cv2.putText(frame, f"- {err}", (x_start + 20, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1)
+                         cv2.putText(frame, f"- {err}", (x_start + 20, y_curr), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                          y_curr += line_height
                 
                 y_curr += 10 # Spacing between reps
@@ -719,7 +719,7 @@ def main():
             if analyzer.history_shk_angles and analyzer.history_shk_angles[-1][1] > 0:
                  curr_angle = analyzer.history_shk_angles[-1][1]
             
-            cv2.putText(frame, f"Angle: {int(curr_angle)}", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            cv2.putText(frame, f"Angle: {int(curr_angle)}", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2)
 
         out_writer.write(frame)
         pbar.update(1)

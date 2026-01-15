@@ -21,6 +21,9 @@ def main():
         print("3. Record & Analyze")
         print("   (Chain steps)")
         print("")
+        print("4. Live Analysis & Preview")
+        print("   (Real-time feedback, no processing delay)")
+        print("")
         print("q. Quit")
         print("="*40)
         
@@ -45,6 +48,13 @@ def main():
         elif choice == '3':
             try:
                 subprocess.run([sys.executable, os.path.join(script_dir, "record_and_analyze.py")])
+            except KeyboardInterrupt:
+                pass
+            input("\nPress Enter to return to menu...")
+
+        elif choice == '4':
+            try:
+                subprocess.run([sys.executable, os.path.join(script_dir, "live_analyze_preview.py")])
             except KeyboardInterrupt:
                 pass
             input("\nPress Enter to return to menu...")
