@@ -12,12 +12,12 @@ from picamera2.outputs import FileOutput
 
 
 def make_filename(lifter_name: str, weight_kg: str) -> str:
-    # Normalise inputs for filenames
+    # Normalise input strings
     name_clean = lifter_name.strip().replace(" ", "_")
     weight_clean = weight_kg.strip().replace(" ", "")
     # Short date-time format: YYYY-MM-DD_HH-MM  (no seconds)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    # Final pattern: lifter_liftingweight_yyyy-mm-dd_HH-mm.h264
+    # Format: lifter_weight_YYYY-MM-DD_HH-MM.h264
     return f"{name_clean}_{weight_clean}_{stamp}.h264"
 
 
@@ -28,7 +28,6 @@ def record_video(preview=True):
 
     filename = make_filename(lifter_name, weight_kg)
     
-    # Create subfolder
     session_dir = filename.replace(".h264", "")
     os.makedirs(session_dir, exist_ok=True)
     
@@ -46,7 +45,6 @@ def record_video(preview=True):
         "buffer_count": 12
     }
     
-    # If preview is requested, add a lores stream for OpenCV display
     if preview:
         config_args["lores"] = {"size": (640, 360), "format": "RGB888"}
 

@@ -15,7 +15,7 @@ import glob
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-# --- Path Setup for Hailo Apps ---
+# Hailo Apps Path Setup
 current_dir = os.path.dirname(os.path.abspath(__file__))
 hailo_apps_dir = os.path.join(current_dir, "hailo-apps")
 
@@ -38,7 +38,7 @@ except ImportError:
         print("Error: Could not import HailoInfer. Check hailo-apps path.")
         sys.exit(1)
 
-# --- Constants & Configuration ---
+# Constants
 DEFAULT_MODEL_S = "/usr/local/hailo/resources/models/hailo8l/yolov8s_pose.hef"
 DEFAULT_MODEL_M = "/usr/local/hailo/resources/models/hailo8l/yolov8m_pose.hef"
 CONF_THRESHOLD = 0.3
@@ -70,7 +70,7 @@ STATE_BOTTOM = "Bottom"
 STATE_CONCENTRIC = "Concentric (Ascending)"
 STATE_LOCKOUT = "Lockout"
 
-# --- Geometry Helpers ---
+# Geometry Helpers
 def calculate_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
@@ -111,7 +111,7 @@ def calculate_iou(box1, box2):
     if union_area == 0: return 0
     return inter_area / union_area
 
-# --- Video Writer Thread (Pipeline) ---
+# Video Writer Thread (Pipeline)
 class AsyncVideoWriter:
     def __init__(self, path, fourcc, fps, size):
         self.writer = cv2.VideoWriter(path, fourcc, fps, size)
@@ -256,7 +256,7 @@ class DeadliftAnalyzer:
         self.history_sh_dist.append((frame_idx, sh_dist))
         self.history_hip_traj.append((frame_idx, h[0], h[1]))
 
-        # --- State Machine ---
+        # State Machine
         
         # Start Condition (Standing)
         # Threshold: Angle > 165 degrees implies legs are straight
@@ -349,7 +349,7 @@ class DeadliftAnalyzer:
 
         return self.state, self.errors
 
-# --- Main App ---
+# Main Execution
 def main():
     parser = argparse.ArgumentParser(description="Deadlift Analyzer")
     parser.add_argument("video_path", nargs="?", help="Path to video file")

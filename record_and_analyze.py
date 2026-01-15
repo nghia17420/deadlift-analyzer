@@ -9,18 +9,7 @@ def main():
     parser.add_argument("--no-preview", action="store_true", help="Disable video preview window")
     args = parser.parse_args()
     
-    # Interactive Menu if no args provided (default behavior usually needs to decide)
-    # But since we want "same options", let's mimic the record.py menu exactly
-    
-    print("\n--- Record & Analyze Deadlift ---")
-    print("1. Record with Preview (Close window to stop)")
-    print("2. Record without Preview (Ctrl+C to stop)")
-    
-    # If user passed --no-preview, we can default to that, or just ignore args and always ask?
-    # The user request says "running it will display options".
-    # So we should probably prioritize the menu, or use args if present to skip menu (headless mode).
-    # Let's use the menu by default for better UX.
-    
+    # Use args if provided, otherwise interactive menu
     if args.no_preview:
         use_preview = False
         print("Option selected via argument: No Preview")

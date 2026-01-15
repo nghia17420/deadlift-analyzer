@@ -19,7 +19,7 @@ def main():
         print("   (Process existing video, select model)")
         print("")
         print("3. Record & Analyze")
-        print("   (Chain both steps automatically)")
+        print("   (Chain steps)")
         print("")
         print("q. Quit")
         print("="*40)
