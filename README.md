@@ -32,8 +32,10 @@ This project utilizes the `YOLOv8-Pose` model to detect keypoints and evaluate l
     pip install opencv-python numpy matplotlib tqdm
     ```
 
-3.  **Model Setup**:
-    Download `yolov8s_pose.hef` or `yolov8n_pose.hef` from the Hailo Model Zoo and place them in the project folder.
+    3.  **Model Setup**:
+    Download `yolov8s_pose.hef` (Small) or `yolov8m_pose.hef` (Medium) from the Hailo Model Zoo.
+    **Important**: Place the `.hef` file directly in the `deadlift-analyzer/` project folder.
+
 
 ## 🧩 Code Structure & Key Functions
 
@@ -100,10 +102,10 @@ We achieved **>30 FPS** generic throughput (video speed) using two main techniqu
     *   *Problem*: `cv2.VideoWriter` is CPU-heavy and blocks execution.
     *   *Solution*: Using `AsyncVideoWriter` allows the Hailo NPU to process the *next* frame while the CPU writes the *previous* frame to disk simultaneously.
 
-2.  **Model Selection**:
-    *   **YOLOv8-Nano (`n`)**: Extremely fast (~40-50 FPS), good for general flow.
+    2.  **Model Selection**:
     *   **YOLOv8-Small (`s`)**: Balanced accuracy (~30 FPS).
     *   **YOLOv8-Medium (`m`)**: High precision, slower (<15 FPS).
+
 
 ## 📖 Usage Guide
 
