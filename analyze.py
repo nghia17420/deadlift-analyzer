@@ -706,6 +706,10 @@ def main():
             shk = [x[1] for x in analyzer.history_shk_angles]
             dists = [x[1] for x in analyzer.history_sh_dist]
             
+            valid_traj = [t for t in analyzer.history_hip_traj if t[1] > 0 and t[2] > 0]
+            traj_x = [t[1] for t in valid_traj]
+            traj_y = [t[2] for t in valid_traj]
+            
             fig, axs = plt.subplots(3, 2, figsize=(14, 15))
             
             # 1. SHK Angle
