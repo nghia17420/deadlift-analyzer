@@ -706,7 +706,7 @@ def main():
             shk = [x[1] for x in analyzer.history_shk_angles]
             dists = [x[1] for x in analyzer.history_sh_dist]
             
-            fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+            fig, axs = plt.subplots(3, 2, figsize=(14, 15))
             
             # 1. SHK Angle
             axs[0, 0].plot(times, shk, 'g')
@@ -714,7 +714,20 @@ def main():
             axs[0, 0].set_xlabel("Frame")
             axs[0, 0].set_ylabel("Deg")
             
-            # 2. Ascending/Descending Times (Bar Chart)
+            # 2. Hip Trajectory
+            axs[0, 1].plot(traj_x, traj_y, 'b.-')
+            axs[0, 1].invert_yaxis() # Image coordinates y is down
+            axs[0, 1].set_title("Hip Trajectory (Front/Back Deviation)")
+            axs[0, 1].set_xlabel("X Pixel")
+            axs[0, 1].set_ylabel("Y Pixel")
+
+            # 3. SH Distance
+            axs[1, 0].plot(times, dists, 'r')
+            axs[1, 0].set_title("Hip-Shoulder Distance (Back Bending)")
+            axs[1, 0].set_xlabel("Frame")
+            axs[1, 0].set_ylabel("Pixels")
+
+            # 4. Ascending/Descending Times (Bar Chart)
             reps = sorted(analyzer.rep_timings.keys())
             asc_times = [analyzer.rep_timings[r].get('asc', 0) for r in reps]
             des_times = [analyzer.rep_timings[r].get('des', 0) for r in reps]
@@ -723,24 +736,20 @@ def main():
             width_bar = 0.35
             
             if reps:
-                rects1 = axs[0, 1].bar(x - width_bar/2, asc_times, width_bar, label='Ascent')
-                rects2 = axs[0, 1].bar(x + width_bar/2, des_times, width_bar, label='Descent')
-                axs[0, 1].set_ylabel('Seconds')
-                axs[0, 1].set_title('Rep Timings')
-                axs[0, 1].set_xticks(x)
-                axs[0, 1].set_xticklabels([f"Rep {r}" for r in reps])
-                axs[0, 1].legend()
+                rects1 = axs[1, 1].bar(x - width_bar/2, asc_times, width_bar, label='Ascent')
+                rects2 = axs[1, 1].bar(x + width_bar/2, des_times, width_bar, label='Descent')
+                axs[1, 1].set_ylabel('Seconds')
+                axs[1, 1].set_title('Rep Timings')
+                axs[1, 1].set_xticks(x)
+                axs[1, 1].set_xticklabels([f"Rep {r}" for r in reps])
+                axs[1, 1].legend()
             else:
-                axs[0, 1].text(0.5, 0.5, "No Reps Recorded", ha='center')
-
-            # 3. SH Distance
-            axs[1, 0].plot(times, dists, 'r')
-            axs[1, 0].set_title("Hip-Shoulder Distance (Back Bending)")
-            axs[1, 0].set_xlabel("Frame")
-            axs[1, 0].set_ylabel("Pixels")
+                axs[1, 1].text(0.5, 0.5, "No Reps Recorded", ha='center')
             
-            # 4. Rep Summary Table
-            axs[1, 1].axis('off')
+            # 5. Rep Summary Table
+            # Remove the empty 6th subplot
+            axs[2, 1].axis('off')
+            axs[2, 0].axis('off')
             
             table_data = []
             for r in reps:
@@ -752,13 +761,15 @@ def main():
                 table_data.append([f"Rep {r}", status, time_str])
                 
             if table_data:
-                table = axs[1, 1].table(cellText=table_data, colLabels=["Rep", "Analysis", "Timings"], loc='center', cellLoc='left')
+                # spanning table across bottom?
+                # Just put it in 2,0 but scale it
+                table = axs[2, 0].table(cellText=table_data, colLabels=["Rep", "Analysis", "Timings"], loc='center', cellLoc='left')
                 table.auto_set_font_size(False)
-                table.set_fontsize(9)
-                table.scale(1, 1.5)
-                axs[1, 1].set_title("Rep Analysis Summary")
+                table.set_fontsize(10)
+                table.scale(1.5, 1.8) 
+                axs[2, 0].set_title("Rep Analysis Summary", loc='left')
             else:
-                 axs[1, 1].text(0.5, 0.5, "No Analysis Data", ha='center')
+                 axs[2, 0].text(0.5, 0.5, "No Analysis Data", ha='center')
             
             plt.tight_layout()
             plt.savefig(video_path + f"_analysis_graphs_{model_name}.png")
