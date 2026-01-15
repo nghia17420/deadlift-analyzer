@@ -113,16 +113,17 @@ if sh_dist < 0.8 * self.start_sh_dist:
     self.log_error("Back is bending")
 ```
 
-### 3. Pipelined Inference (`AsyncVideoWriter`)
-To achieve high FPS, we decoupled the **Inference Loop** from the **Video Writing** (I/O) operation. The main thread pushes processed frames to a queue, and a background thread handles the slow `.mp4` encoding.
+### 3. Threaded Pipeline (`FramePipeline`)
+To maximize hardware utilization, we replaced the simple loop with a Producer-Consumer architecture. The main thread continuously feeds the NPU (Hailo) while a background worker processes the results order.
 
 ```python
-class AsyncVideoWriter:
-    def _run(self):
-        while self.running:
-            # Write frames from buffer without blocking the AI model
-            frame = self.queue.get()
-            self.writer.write(frame)
+# Producer (Main) -> Async Inference -> Queue -> Consumer (Worker) -> Async Writer
+def processing_worker(proc_queue):
+    while True:
+        # Fetches completed inference results
+        frame, detections = proc_queue.get()
+        # Post-processes and analyzes without blocking the NPU
+        analyze_and_draw(frame, detections)
 ```
 
 ## 📚 Dependencies: Why `hailo-apps`?
@@ -139,13 +140,21 @@ We include the [hailo-apps](https://github.com/hailo-ai/hailo-apps) repository i
 
 We achieved **>30 FPS** generic throughput (video speed) using two main techniques:
 
-1.  **Pipelining (Threading)**: 
-    *   *Problem*: `cv2.VideoWriter` is CPU-heavy and blocks execution.
-    *   *Solution*: Using `AsyncVideoWriter` allows the Hailo NPU to process the *next* frame while the CPU writes the *previous* frame to disk simultaneously.
+1.  **Threaded Inference Pipeline (Producer-Consumer)**: 
+    *   *Problem*: Sequential processing (`Read -> Infer -> Process -> Write`) leaves the CPU or NPU idle for significant periods.
+    *   *Solution*: We implemented a **multi-stage threaded pipeline**:
+        *   **Stage 1 (Main Thread)**: Reads frames and dispatches async inference requests to the NPU.
+        *   **Stage 2 (Hailo Async)**: The NPU processes frames in the background.
+        *   **Stage 3 (Worker Thread)**: A dedicated consumer thread handles post-processing, tracking, analysis logic, and drawing.
+        *   **Stage 4 (Async Writer)**: Video encoding is offloaded to a separate thread.
+    *   *Result*: Drastically reduced latency and higher throughput by overlapping all operations.
 
-    2.  **Model Selection**:
-    *   **YOLOv8-Small (`s`)**: Balanced accuracy (~30 FPS).
-    *   **YOLOv8-Medium (`m`)**: High precision, slower (<15 FPS).
+2.  **Model Selection**:
+    *   **YOLOv8-Small (`s`)**: Balanced accuracy (~30+ FPS).
+    *   **YOLOv8-Medium (`m`)**: High precision, improved tracking.
+
+3.  **Buffer Control**:
+    *   Use the `--buffer` argument to control how many frames can be "in-flight". Higher buffers smooth out jitter but use more RAM.
 
 
 ## 📖 Usage Guide
@@ -156,6 +165,15 @@ Run `python menu.py` to access the unified interface.
 - **Option 2 (Analyze)**: Selects the AI model and video file.
 - **Option 3 (Auto)**: Chains both steps for a seamless "Record -> Evaluate" workout flow.
 - **Option 4 (Live Analysis)**: Starts the real-time preview mode. Useful for quick form checks or setup. Automatically saves the output to a timestamped folder.
+
+### Advanced Usage (CLI)
+You can run the analyzer directly with additional options:
+
+```bash
+python3 analyze.py video.mp4 --model yolov8s_pose.hef --buffer 64
+```
+
+- `--buffer [N]`: Sets the size of the internal frame buffer (default: 32). Increase this if you experience dropped frames or jitter, provided you have available RAM.
 
 ## 📂 Git & Version Control
 
