@@ -32,10 +32,50 @@ This project utilizes the `YOLOv8-Pose` model to detect keypoints and evaluate l
     pip install opencv-python numpy matplotlib tqdm
     ```
 
-    3.  **Model Setup**:
+3.  **Model Setup**:
     Download `yolov8s_pose.hef` (Small) or `yolov8m_pose.hef` (Medium) from the Hailo Model Zoo.
     **Important**: Place the `.hef` file directly in the `deadlift-analyzer/` project folder.
 
+## 📂 Project Structure
+
+Here is an overview of the key files and directories in the project:
+
+-   `analyze.py`: **Core Application**. Handles AI inference, state machine logic, error detection, and video generation.
+-   `record.py`: Recording script using `Picamera2` to capture raw `.h264` video.
+-   `menu.py`: Interactive CLI menu to easily switch between recording and analyzing.
+-   `record_and_analyze.py`: Automation script that records a video and immediately runs analysis on it.
+-   `hailo-apps/`: A bundled submodule containing the necessary Hailo NPU interface and post-processing tools.
+
+## 📊 Output Description
+
+After analysis, the tool generates two files in the same directory as the input video:
+
+1.  **Analyzed Video** (e.g., `video_analyzed_yolov8s.mp4`):
+    -   **Visual Overlay**: Skeleton overlaid on the lifter.
+    -   **Rep Counter**: Tracks completed reps.
+    -   **Real-time Feedback**: Displays "Good" or specific error messages on the top right.
+    -   **Phase Timings**: Shows Ascent and Descent times for each rep.
+
+2.  **Analysis Graphs** (e.g., `video_analysis_graphs_yolov8s.png`):
+    -   **SHK Angle**: Graph of the Shoulder-Hip-Knee angle over time.
+    -   **Rep Timings**: Bar chart comparing ascent vs. descent duration for each rep.
+    -   **Hip Trajectory**: Plot of hip path stability.
+    -   **Summary Table**: Detailed text breakdown of every rep's status.
+
+## ⚙️ Configuration & Thresholds
+
+The analysis logic relies on specific thresholds defined in `analyze.py`. You can adjust these to fit different body types or lifting styles.
+
+**Location to Edit**: Open `analyze.py` and modify the values in the `DeadliftAnalyzer` class or the `analyze_frame` method.
+
+| Metric | Current Threshold | Description | Code Location |
+| :--- | :--- | :--- | :--- |
+| **Start/Lockout Phase** | `Angle > 165°` | Defines when the lifter is standing straight (hips extended). | `analyze_frame`: `is_straight = (angle > 165)` |
+| **Back Bending** | `< 80%` of start dist | Flags if the Hip-Shoulder distance compresses significantly (upper back rounding). | `analyze_frame`: `if sh_dist < 0.8 * self.start_sh_dist` |
+| **Hip Hinge Comp.** | `> 20%` of leg length | Alerts if the hips drop too much during the hinge (squatting the weight). | `analyze_frame`: `if drop > 0.2 * leg_len` |
+| **Eccentric Speed** | `< 1.0 second` | Warns if the weight is dropped too quickly (Uncontrolled Eccentric). | `analyze_frame`: `if duration < 1.0:` |
+| **Fatigue Monitor** | `> 3.0 seconds` | Flags "Mechanical Fatigue" if the concentric phase is slow. | `analyze_frame`: `elif duration > 3.0:` |
+| **Side Detection** | Confidence > 0.2 | Auto-detects which side (left/right) is visible based on keypoint confidence. | `get_side_points` method |
 
 ## 🧩 Code Structure & Key Functions
 
@@ -111,7 +151,7 @@ We achieved **>30 FPS** generic throughput (video speed) using two main techniqu
 
 ### Main Menu
 Run `python menu.py` to access the unified interface.
-- **Option 1 (Record)**: Uses `Picamera2` to capture raw `.h264` footage. Raw capture prevents dropped frames during recording.
+- **Option 1 (Record)**: Uses `Picamera2` to capture raw `.h264` video. Raw capture prevents dropped frames during recording.
 - **Option 2 (Analyze)**: Selects the AI model and video file.
 - **Option 3 (Auto)**: Chains both steps for a seamless "Record -> Evaluate" workout flow.
 
